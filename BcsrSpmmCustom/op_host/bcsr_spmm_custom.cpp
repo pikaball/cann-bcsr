@@ -1,23 +1,58 @@
 
 #include "bcsr_spmm_custom_tiling.h"
 #include "register/op_def_registry.h"
+#include "tiling/platform/platform_ascendc.h"
 
+// constexpr uint32_t BLOCK_SIZE = 32;
+// constexpr uint32_t BUFFER_NUM = 2;
+// constexpr uint32_t UB_BLOCK_NUM = 100;  // UB最大可以使用的block数量
+// constexpr uint32_t MAX_AVAILABLE_UB_BLOCK_NUM = UB_BLOCK_NUM / BUFFER_NUM * BUFFER_NUM;
 
 namespace optiling {
 static ge::graphStatus TilingFunc(gert::TilingContext* context)
 {
+    BcsrSpmmCustomTilingData tiling;
+    auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
 
-  BcsrSpmmCustomTilingData tiling;
-  const gert::StorageShape* x1_shape = context->GetInputShape(0);
-  int32_t data_sz = 1;
-  for (int i = 0; i < x1_shape->GetStorageShape().GetDimNum(); i++)
-    data_sz *= x1_shape->GetStorageShape().GetDim(i);
-  tiling.set_size(data_sz);
-  context->SetBlockDim(8);
-  tiling.SaveToBuffer(context->GetRawTilingData()->GetData(), context->GetRawTilingData()->GetCapacity());
-  context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());
+    // a_shape, row_ptr, col, val, b
+    auto shape_a_addr = context->GetInputTensor(0)->GetData<int64_t>();
+    auto shape_b = context->GetInputTensor(4)->GetOriginShape();
+    int32_t M = shape_a_addr[0];
+    int32_t K = shape_a_addr[1];
+    int32_t N = shape_b.GetDim(1);
 
-  return ge::GRAPH_SUCCESS;
+    // 备用实现
+    // auto shape_b = context->GetInputTensor(4)->GetOriginShape();
+    // auto shape_c = context->GetOutputShape(0)->GetOriginShape();
+    // int32_t M = shape_c.GetDim(0);
+    // int32_t K = shape_b.GetDim(0);
+    // int32_t N = shape_b.GetDim(1);
+
+    tiling.set_M(M);
+    tiling.set_N(N);
+    tiling.set_K(K);
+
+    // totalLength 行窗口数
+    uint32_t totalLength = context->GetInputShape(1)->GetOriginShape().GetShapeSize();
+    uint32_t blockDim = ascendcPlatform.GetCoreNumAic();    // Cube core 数量
+    blockDim = blockDim > totalLength ? totalLength : blockDim;
+    context->SetBlockDim(blockDim);
+    tiling.set_totalLength(totalLength);
+
+    uint32_t formerNum = totalLength % blockDim;
+    uint32_t formerLength = (totalLength + blockDim - 1) / blockDim;
+    uint32_t tailNum = blockDim - formerNum;
+    uint32_t tailLength = totalLength / blockDim;
+    tiling.set_formerNum(formerNum);
+    tiling.set_formerLength(formerLength);
+    tiling.set_tailNum(tailNum);
+    tiling.set_tailLength(tailLength);
+
+    tiling.SaveToBuffer(context->GetRawTilingData()->GetData(), context->GetRawTilingData()->GetCapacity());
+    context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());
+    size_t *currentWorkspace = context->GetWorkspaceSizes(1);
+    currentWorkspace[0] = 0;
+    return ge::GRAPH_SUCCESS;
 }
 }
 
@@ -25,16 +60,28 @@ static ge::graphStatus TilingFunc(gert::TilingContext* context)
 namespace ge {
 static ge::graphStatus InferShape(gert::InferShapeContext* context)
 {
-    const gert::Shape* x1_shape = context->GetInputShape(0);
-    gert::Shape* y_shape = context->GetOutputShape(0);
-    *y_shape = *x1_shape;
-    return GRAPH_SUCCESS;
+    // a_shape, row_ptr, col, val, b
+    auto a_shape_addr = context->GetInputTensor(0)->GetData<int64_t>();
+    auto b_shape = context->GetInputShape(4);
+    auto c_shape = context->GetOutputShape(0);
+    if (b_shape == nullptr || a_shape_addr == nullptr || c_shape == nullptr) {
+        return ge::GRAPH_FAILED;
+    }
+
+    int M = a_shape_addr[0];
+    int N = b_shape->GetDim(1);
+    c_shape->SetDimNum(2);
+    c_shape->SetDim(0, M);
+    c_shape->SetDim(1, N);
+
+    return ge::GRAPH_SUCCESS;
 }
 static ge::graphStatus InferDataType(gert::InferDataTypeContext *context)
 {
-const auto inputDataType = context->GetInputDataType(0);
-context->SetOutputDataType(0, inputDataType);
-return ge::GRAPH_SUCCESS;
+    if (context->SetOutputDataType(0, ge::DataType::DT_FLOAT) != ge::GRAPH_SUCCESS) {
+        return ge::GRAPH_FAILED;
+    }
+    return ge::GRAPH_SUCCESS;
 }
 }
 
@@ -48,32 +95,27 @@ public:
             .ParamType(REQUIRED)
             .DataType({ge::DT_INT64})
             .Format({ge::FORMAT_ND})
-            .UnknownShapeFormat({ge::FORMAT_ND});
-        this->Input("rowPtr")
+            .ValueDepend(REQUIRED); // 声明 a_shape 输入为数据依赖输入
+        this->Input("row_ptr")
             .ParamType(REQUIRED)
             .DataType({ge::DT_INT32})
-            .Format({ge::FORMAT_ND})
-            .UnknownShapeFormat({ge::FORMAT_ND});
+            .Format({ge::FORMAT_ND});
         this->Input("col")
             .ParamType(REQUIRED)
             .DataType({ge::DT_INT32})
-            .Format({ge::FORMAT_ND})
-            .UnknownShapeFormat({ge::FORMAT_ND});
+            .Format({ge::FORMAT_ND});
         this->Input("val")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16})
-            .Format({ge::FORMAT_ND})
-            .UnknownShapeFormat({ge::FORMAT_ND});
+            .Format({ge::FORMAT_ND});
         this->Input("b")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16})
-            .Format({ge::FORMAT_ND})
-            .UnknownShapeFormat({ge::FORMAT_ND});
+            .Format({ge::FORMAT_ND});
         this->Output("c")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT})
-            .Format({ge::FORMAT_ND})
-            .UnknownShapeFormat({ge::FORMAT_ND});
+            .Format({ge::FORMAT_ND});
 
         this->SetInferShape(ge::InferShape).SetInferDataType(ge::InferDataType);
 
