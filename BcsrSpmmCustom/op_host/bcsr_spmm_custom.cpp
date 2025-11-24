@@ -3,10 +3,9 @@
 #include "register/op_def_registry.h"
 #include "tiling/platform/platform_ascendc.h"
 
-// constexpr uint32_t BLOCK_SIZE = 32;
-// constexpr uint32_t BUFFER_NUM = 2;
-// constexpr uint32_t UB_BLOCK_NUM = 100;  // UB最大可以使用的block数量
-// constexpr uint32_t MAX_AVAILABLE_UB_BLOCK_NUM = UB_BLOCK_NUM / BUFFER_NUM * BUFFER_NUM;
+// output C Tile size [16, 16]
+constexpr uint32_t CUBE_BLOCK_N = 16;
+constexpr uint32_t MAX_MMAD_N = 2048;
 
 namespace optiling {
 static ge::graphStatus TilingFunc(gert::TilingContext* context)
@@ -33,7 +32,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext* context)
     tiling.set_K(K);
 
     // totalLength 行窗口数
-    uint32_t totalLength = context->GetInputShape(1)->GetOriginShape().GetShapeSize();
+    uint32_t totalLength = context->GetInputShape(1)->GetOriginShape().GetShapeSize() - 1;
     uint32_t blockDim = ascendcPlatform.GetCoreNumAic();    // Cube core 数量
     blockDim = blockDim > totalLength ? totalLength : blockDim;
     context->SetBlockDim(blockDim);
@@ -47,6 +46,16 @@ static ge::graphStatus TilingFunc(gert::TilingContext* context)
     tiling.set_formerLength(formerLength);
     tiling.set_tailNum(tailNum);
     tiling.set_tailLength(tailLength);
+
+    // mmad相关参数计算
+    uint32_t mmadN = MAX_MMAD_N;
+    uint32_t mmadNum = (N + mmadN - 1) / mmadN;
+    uint32_t lastMmadN = N - (mmadNum - 1) * mmadN;
+    uint32_t lastMmadCubeBlockNum = (lastMmadN + CUBE_BLOCK_N - 1) / CUBE_BLOCK_N;
+    tiling.set_mmadNum(mmadNum);
+    tiling.set_mmadN(mmadN);
+    tiling.set_lastMmadN(lastMmadN);
+    tiling.set_lastMmadCubeBlockNum(lastMmadCubeBlockNum);
 
     tiling.SaveToBuffer(context->GetRawTilingData()->GetData(), context->GetRawTilingData()->GetCapacity());
     context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());
