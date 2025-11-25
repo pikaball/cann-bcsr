@@ -3,8 +3,6 @@
 #include "register/op_def_registry.h"
 #include "tiling/platform/platform_ascendc.h"
 
-// output C Tile size [16, 16]
-constexpr uint32_t CUBE_BLOCK_N = 16;
 constexpr uint32_t MAX_MMAD_N = 2048;
 
 namespace optiling {
@@ -47,11 +45,12 @@ static ge::graphStatus TilingFunc(gert::TilingContext* context)
     tiling.set_tailNum(tailNum);
     tiling.set_tailLength(tailLength);
 
+    uint32_t alignNum = 32 / sizeof(uint16_t);
     // mmad相关参数计算
     uint32_t mmadN = MAX_MMAD_N;
     uint32_t mmadNum = (N + mmadN - 1) / mmadN;
     uint32_t lastMmadN = N - (mmadNum - 1) * mmadN;
-    uint32_t lastMmadCubeBlockNum = (lastMmadN + CUBE_BLOCK_N - 1) / CUBE_BLOCK_N;
+    uint32_t lastMmadCubeBlockNum = (lastMmadN + alignNum - 1) / alignNum;
     tiling.set_mmadNum(mmadNum);
     tiling.set_mmadN(mmadN);
     tiling.set_lastMmadN(lastMmadN);

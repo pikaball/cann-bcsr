@@ -15,13 +15,15 @@ public:
         int32_t M, int32_t N, int32_t K,
         uint32_t formerNum, uint32_t formerLength,
         uint32_t tailNum, uint32_t tailLength,
-        uint32_t MmadNum, uint32_t MmadN,
+        uint32_t mmadNum, uint32_t mmadN,
         uint32_t lastMmadN, uint32_t lastMmadCubeBlockNum
     ) {
         // set cube only
         KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIC_ONLY);
 
-        this->mmadNum = MmadNum;
+        this->N = N;
+        this->mmadNum = mmadNum;
+        this->mmadCubeBlockNum = mmadN / CUBE_BLOCK_M;
         this->lastMmadN = lastMmadN;
         this->lastMmadCubeBlockNum = lastMmadCubeBlockNum;
         if (AscendC::GetBlockIdx() < formerNum) {
@@ -49,38 +51,153 @@ public:
 
         pipe.InitBuffer(inQueueA1, 1, CUBE_BLOCK_SIZE * sizeof(aType)); // 512B
         pipe.InitBuffer(inQueueA2, 1, CUBE_BLOCK_SIZE * sizeof(aType)); // 512B
-        pipe.InitBuffer(inQueueB1, 1, CUBE_BLOCK_K * (MmadN * MmadNum) * sizeof(bType));
-        pipe.InitBuffer(inQueueB2, 1, CUBE_BLOCK_K * (MmadN * MmadNum) * sizeof(bType));
+        pipe.InitBuffer(inQueueB1, 1, CUBE_BLOCK_K * mmadN * sizeof(bType));
+        pipe.InitBuffer(inQueueB2, 1, CUBE_BLOCK_K * mmadN * sizeof(bType));
         pipe.InitBuffer(outQueueCO1, 1, cSize * sizeof(cType));
     }
 
     __aicore__ inline void Process()
     {
-        // if (this->rowWindowNum == 0) {
-        //     return;
-        // }
-
-        for (int32_t row = 0; row < this->rowWindowNum; row++) {
+        for (int32_t row = 0; row < rowWindowNum; row++) {
             // 行窗口中的每块
-            for (int32_t n = 0; n < rowPtrGm.GetValue(row + 1) - rowPtrGm.GetValue(row); n++) {
-                int32_t col = colGm.GetValue(n);
-                // TODO
-                CopyIn(n);
-                SplitA();
-                SplitB();
-                Compute();
-                CopyOut(row);
+            for (int32_t i = 0; i < rowPtrGm.GetValue(row + 1) - rowPtrGm.GetValue(row); i++) {
+                int32_t col = colGm.GetValue(i);
+                // B窗口行中的每个 mmad 块
+                for (int32_t j = 0; j < mmadNum; j++) {
+                    // 因为是流水线式的，所以需要每次搬运 A 即使源地址一样
+                    CopyInA(row, i);
+                    CopyInB(j, col);
+                    SplitA();
+                    SplitB(j);
+                    Compute(j);
+                    CopyOut(row, j);
+                }
             }
         }
     }
 
-// TODO
 private:
-    __aicore__ inline void CopyIn() {} // DataCopy API with ND2NZ
-    __aicore__ inline void SplitA() {} // no need
-    __aicore__ inline void SplitB() {} // NZ2NZ, LoadData/LoadDataWithTranspose API
-    __aicore__ inline void Compute() {}
-    __aicore__ inline void CopyOut() {} // Fixpipe API
+    // 每次 A 只读一个块，所以 ND 即 ZZ
+    // 可以直接用 LoadData 搬运 512B, GM->A2
+    // __aicore__ inline void CopyInA(int32_t row, int32_t i) {
+    //     AscendC::LocalTensor<aType> a2Local = inQueueA2.AllocTensor<aType>();
+    //     AscendC::LoadData2DParams params = {
+    //         // startIndex, repeatTimes, srcStride, 0, dstGap, ifTranspose, 0
+    //         (rowPtrGm.GetValue(row) - rowPtrGm.GetValue(0) + i), 1, 0, 0, 0, false, 0
+    //     };
+    //     AscendC::LoadData(a2Local, aGm, params);
+    //     inQueueA2.EnQue<aType>(a2Local);
+    // }
+
+    // 但是这里保留 GM->A1->A2 的形式，方便后续扩展
+    __aicore__ inline void CopyInA(int32_t row, int32_t i) {
+        AscendC::LocalTensor<aType> a1Local = inQueueA1.AllocTensor<aType>();
+        auto aGM = this->valGm[(rowPtrGm.GetValue(row) - rowPtrGm.GetValue(0) + i) * CUBE_BLOCK_SIZE];
+
+        AscendC::Nd2NzParams params;
+        params.ndNum = 1;
+        params.nValue = CUBE_BLOCK_M;
+        params.dValue = CUBE_BLOCK_K;
+        params.srcNdMatrixStride = 0;
+        params.srcDValue = CUBE_BLOCK_K;
+        params.dstNzC0Stride = CUBE_BLOCK_M;
+        params.dstNzNStride = 1;
+        params.dstNzMatrixStride = 0;
+
+        AscendC::DataCopy(a1Local, aGM, params);
+        inQueueA2.EnQue<aType>(a1Local);
+    }
+
+    // DataCopy API for each line of B
+    // 如果 leading N 太大用不了 ND2NZ 随路转化
+    __aicore__ inline void CopyInB(int32_t progress, int32_t k) {
+        AscendC::LocalTensor<bType> b1Local = inQueueB1.AllocTensor<bType>();
+        auto bGm = this->bGM[k * N + progress * mmadN];
+
+        AscendC::DataCopyParams params;
+        // 有一小部分 padding 的数据是不需要的，Mmad 时会忽略
+        params.blockCount = (progress == mmadNum - 1) ? lastMmadCubeBlockNum : mmadCubeBlockNum;
+        params.blockLen = 1;
+        params.srcGap = 0;
+        params.dstGap = CUBE_BLOCK_K;
+        for (int32_t i = 0; i < CUBE_BLOCK_K; i++) {
+            auto src = bGm[i * N];
+            auto dst = b1Local[i * mmadCubeBlockNum];
+            AscendC::DataCopy(dst, src, params);
+        }
+        inQueueB1.EnQue<bType>(b1Local);
+    }
+
+    __aicore__ inline void SplitA() {
+        AscendC::LocalTensor<aType> a1Local = inQueueA1.DeQue<aType>();
+        AscendC::LocalTensor<aType> a2Local = inQueueA2.AllocTensor<aType>();
+
+        AscendC::LoadData2DParams params;
+        // params.repeatTimes = CUBE_BLOCK_SIZE * sizeof(aType) / 512;
+        params.repeatTimes = 1;
+        params.srcStride = 1;
+        params.ifTranspose = false;
+        AscendC::LoadData(a2Local, a1Local, params);
+
+        inQueueA2.EnQue<aType>(a2Local);
+        inQueueA1.FreeTensor(a1Local);
+    }
+
+    // NZ2ZN, LoadDataWithTranspose API
+    // sizeof(bType) <= 2 时可以用
+    __aicore__ inline void SplitB(int32_t progress) {
+        AscendC::LocalTensor<bType> b1Local = inQueueB1.DeQue<bType>();
+        AscendC::LocalTensor<bType> b2Local = inQueueB2.AllocTensor<bType>();
+
+        AscendC::LoadData2dTransposeParams params;
+        params.startIndex = 0;
+        params.repeatTimes = (progress == mmadNum - 1) ? lastMmadCubeBlockNum : mmadCubeBlockNum;
+        params.srcStride = 1;
+        params.dstGap = sizeof(bType) == 2 ? 0 : 1;
+        params.dstFracGap = 0;
+        AscendC::LoadDataWithTranspose(b2Local, b1Local, params);
+
+        inQueueB1.FreeTensor(b1Local);
+        inQueueB2.EnQue<bType>(b2Local);
+    }
+
+    __aicore__ inline void Compute(int32_t progress) {
+        AscendC::LocalTensor<aType> a2Local = inQueueA2.DeQue<aType>();
+        AscendC::LocalTensor<bType> b2Local = inQueueB2.DeQue<bType>();
+        AscendC::LocalTensor<cType> c1Local = outQueueCO1.AllocTensor<cType>();
+
+        AscendC::MmadParams params;
+        params.m = CUBE_BLOCK_M;
+        // TODO: K 不一定跟 CUBE_BLOCK_K 对齐
+        // col == K / CUBE_BLOCK_K * CUBE_BLOCK_K, 尾部需要特殊处理
+        // 可能可以通过给 bGM 更大的空间，padding 0 来解决
+        params.k = CUBE_BLOCK_K;
+        params.n = (progress == mmadNum - 1) ? lastMmadN : mmadN;
+        AscendC::Mmad(c1Local, a2Local, b2Local, params);
+
+        outQueueCO1.EnQue<cType>(c1Local);
+        inQueueA2.FreeTensor(a2Local);
+        inQueueB2.FreeTensor(b2Local);
+    }
+
+    // Fixpipe API
+    __aicore__ inline void CopyOut(int32_t row, int32_t progress) {
+        auto cGm = this->cGM[row * CUBE_BLOCK_M * N + progress * mmadCubeBlockNum * CUBE_BLOCK_M];
+        AscendC::LocalTensor<cType> c1Local = outQueueCO1.DeQue<cType>();
+
+        AscendC::FixpipeParamsV220 params;
+        params.ndNum = 1;
+        params.mSize = CUBE_BLOCK_M;
+        params.nSize = (progress == mmadNum - 1) ? lastMmadN : mmadN;
+        params.srcStride = CUBE_BLOCK_M;
+        params.dstStride = N;
+        params.srcNdStride = 0;
+        params.dstNdStride = 0;
+
+        // 默认使能 NZ -> ND
+        AscendC::Fixpipe(cGm, c1Local, params);
+        outQueueCO1.FreeTensor(c1Local);
+    }
 
 private:
     AscendC::TPipe pipe;
@@ -97,8 +214,10 @@ private:
     AscendC::GlobalTensor<bType> bGM;
     AscendC::GlobalTensor<cType> cGM;
 
+    int32_t N;
     uint32_t rowWindowNum;
     uint32_t mmadNum;
+    uint32_t mmadCubeBlockNum;
     uint32_t lastMmadN;
     uint32_t lastMmadCubeBlockNum;
 };
