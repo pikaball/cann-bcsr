@@ -1,21 +1,23 @@
 #include "kernel_operator.h"
 
+
 template<typename aType, typename bType, typename cType>
 class BcsrSpmmKernel {
 // output C Tile size [16, 16]
-constexpr uint32_t CUBE_BLOCK_M = 16;
-constexpr uint32_t CUBE_BLOCK_K = 32 / sizeof(aType);
-constexpr uint32_t CUBE_BLOCK_SIZE = CUBE_BLOCK_M * CUBE_BLOCK_K;
+uint32_t CUBE_BLOCK_M = 16;
+uint32_t CUBE_BLOCK_K = 32 / sizeof(aType);
+uint32_t CUBE_BLOCK_SIZE = CUBE_BLOCK_M * CUBE_BLOCK_K;
 
 public:
     __aicore__ inline BcsrSpmmKernel() {}
     __aicore__ inline void Init(
+        GM_ADDR a_shape,
         GM_ADDR row_ptr, GM_ADDR col, GM_ADDR val,
         GM_ADDR b, GM_ADDR c, GM_ADDR workspace,
         int32_t M, int32_t N, int32_t K,
         uint32_t formerNum, uint32_t formerLength,
         uint32_t tailNum, uint32_t tailLength,
-        uint32_t mmadNum, uint32_t mmadN,
+        uint32_t mmadNum, uint32_t mmadN,   
         uint32_t lastMmadN, uint32_t lastMmadCubeBlockNum
     ) {
         // set cube only
@@ -23,20 +25,21 @@ public:
 
         this->N = N;
         this->mmadNum = mmadNum;
-        this->mmadCubeBlockNum = mmadN / CUBE_BLOCK_M;
+        this->mmadCubeBlockNum = mmadN / CUBE_BLOCK_M;  
         this->lastMmadN = lastMmadN;
         this->lastMmadCubeBlockNum = lastMmadCubeBlockNum;
+        this->mmadN = mmadN;
         if (AscendC::GetBlockIdx() < formerNum) {
             this->rowWindowNum = formerLength;
             rowPtrGm.SetGlobalBuffer((__gm__ int32_t *)row_ptr + formerLength * AscendC::GetBlockIdx(), formerLength + 1);
-            cGm.SetGlobalBuffer((__gm__ cType *)c + formerLength * AscendC::GetBlockIdx() * CUBE_BLOCK_M * N, 
+            cGM.SetGlobalBuffer((__gm__ cType *)c + formerLength * AscendC::GetBlockIdx() * CUBE_BLOCK_M * N, 
                 formerLength * CUBE_BLOCK_M * N);
         } else if (AscendC::GetBlockIdx() < formerNum + tailNum) {
             this->rowWindowNum = tailLength;
             rowPtrGm.SetGlobalBuffer((__gm__ int32_t *)row_ptr + formerLength * formerNum +
                 tailLength * (AscendC::GetBlockIdx() - formerNum), tailLength + 1
             );
-            cGm.SetGlobalBuffer((__gm__ cType *)c + (formerLength * formerNum +
+            cGM.SetGlobalBuffer((__gm__ cType *)c + (formerLength * formerNum +
                 tailLength * (AscendC::GetBlockIdx() - formerNum)) * CUBE_BLOCK_M * N,
                 tailLength * CUBE_BLOCK_M * N
             );
@@ -47,13 +50,13 @@ public:
         valGm.SetGlobalBuffer((__gm__ aType *)val + CUBE_BLOCK_SIZE * rowPtrGm.GetValue(0),
             CUBE_BLOCK_SIZE * (rowPtrGm.GetValue(formerLength) - rowPtrGm.GetValue(0))
         );
-        bGm.SetGlobalBuffer((__gm__ bType *)b, (uint64_t)K * N * sizeof(bType));
+        bGM.SetGlobalBuffer((__gm__ bType *)b, (uint64_t)K * N * sizeof(bType));
 
         pipe.InitBuffer(inQueueA1, 1, CUBE_BLOCK_SIZE * sizeof(aType)); // 512B
         pipe.InitBuffer(inQueueA2, 1, CUBE_BLOCK_SIZE * sizeof(aType)); // 512B
-        pipe.InitBuffer(inQueueB1, 1, CUBE_BLOCK_K * mmadN * sizeof(bType));
-        pipe.InitBuffer(inQueueB2, 1, CUBE_BLOCK_K * mmadN * sizeof(bType));
-        pipe.InitBuffer(outQueueCO1, 1, cSize * sizeof(cType));
+        pipe.InitBuffer(inQueueB1, 1, CUBE_BLOCK_K * this->mmadN * sizeof(bType));
+        pipe.InitBuffer(inQueueB2, 1, CUBE_BLOCK_K * this->mmadN * sizeof(bType));
+        pipe.InitBuffer(outQueueCO1, 1, CUBE_BLOCK_M * this->mmadN  * sizeof(cType));
     }
 
     __aicore__ inline void Process()
@@ -112,14 +115,14 @@ private:
     // 如果 leading N 太大用不了 ND2NZ 随路转化
     __aicore__ inline void CopyInB(int32_t progress, int32_t k) {
         AscendC::LocalTensor<bType> b1Local = inQueueB1.AllocTensor<bType>();
-        auto bGm = this->bGM[k * N + progress * mmadN];
+        auto bGm = this->bGM[k * N + progress * this->mmadN];
 
         AscendC::DataCopyParams params;
         // 有一小部分 padding 的数据是不需要的，Mmad 时会忽略
         params.blockCount = (progress == mmadNum - 1) ? lastMmadCubeBlockNum : mmadCubeBlockNum;
         params.blockLen = 1;
-        params.srcGap = 0;
-        params.dstGap = CUBE_BLOCK_K;
+        params.srcStride = 0;
+        params.dstStride = CUBE_BLOCK_K;
         for (int32_t i = 0; i < CUBE_BLOCK_K; i++) {
             auto src = bGm[i * N];
             auto dst = b1Local[i * mmadCubeBlockNum];
@@ -172,7 +175,7 @@ private:
         // col == K / CUBE_BLOCK_K * CUBE_BLOCK_K, 尾部需要特殊处理
         // 可能可以通过给 bGM 更大的空间，padding 0 来解决
         params.k = CUBE_BLOCK_K;
-        params.n = (progress == mmadNum - 1) ? lastMmadN : mmadN;
+        params.n = (progress == mmadNum - 1) ? lastMmadN : this->mmadN;
         AscendC::Mmad(c1Local, a2Local, b2Local, params);
 
         outQueueCO1.EnQue<cType>(c1Local);
@@ -188,7 +191,7 @@ private:
         AscendC::FixpipeParamsV220 params;
         params.ndNum = 1;
         params.mSize = CUBE_BLOCK_M;
-        params.nSize = (progress == mmadNum - 1) ? lastMmadN : mmadN;
+        params.nSize = (progress == mmadNum - 1) ? lastMmadN : this->mmadN;
         params.srcStride = CUBE_BLOCK_M;
         params.dstStride = N;
         params.srcNdStride = 0;
@@ -220,6 +223,7 @@ private:
     uint32_t mmadCubeBlockNum;
     uint32_t lastMmadN;
     uint32_t lastMmadCubeBlockNum;
+    uint32_t mmadN;
 };
 
 extern "C" __global__ __aicore__ void bcsr_spmm_custom(
