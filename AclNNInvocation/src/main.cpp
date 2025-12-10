@@ -1,0 +1,213 @@
+/**
+ * @file main.cpp
+ *
+ * Copyright (C) 2023-2024. Huawei Technologies Co., Ltd. All rights reserved.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ */
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include <chrono>
+#include <cstdint>
+#include <iostream>
+#include <string>
+
+#include "acl/acl.h"
+#include "common.h"
+#include "op_runner.h"
+#include "timer.h"
+
+bool g_isDevice = false;
+int deviceId = 0;
+
+OperatorDesc CreateOpDesc(int64_t m, int64_t k, int64_t n, int64_t nnz)
+{
+    // define operator
+    std::vector<int64_t> shapeRowIndices{nnz};
+    std::vector<int64_t> shapeColIndices{nnz};
+    std::vector<int64_t> shapeValues{nnz};
+    std::vector<int64_t> shapeAShape{2};
+    std::vector<int64_t> shapeB{k, n};
+    std::vector<int64_t> shapeC{m, n};
+
+    aclDataType dataTypeIndices = ACL_INT32;
+    aclDataType dataTypeValues = ACL_FLOAT16;
+    aclDataType dataTypeAShape = ACL_INT64;
+    aclDataType dataTypeB = ACL_FLOAT16;
+    aclDataType dataTypeC = ACL_FLOAT;
+
+    aclFormat format = ACL_FORMAT_ND;
+
+    OperatorDesc opDesc;
+    opDesc.SetInputArrayNum(1);
+    opDesc.AddInputTensorDesc(dataTypeAShape, shapeAShape.size(), shapeAShape.data(), format);
+    opDesc.AddInputTensorDesc(dataTypeIndices, shapeRowIndices.size(), shapeRowIndices.data(), format);
+    opDesc.AddInputTensorDesc(dataTypeIndices, shapeColIndices.size(), shapeColIndices.data(), format);
+    opDesc.AddInputTensorDesc(dataTypeValues, shapeValues.size(), shapeValues.data(), format);
+    opDesc.AddInputTensorDesc(dataTypeB, shapeB.size(), shapeB.data(), format);
+    opDesc.AddOutputTensorDesc(dataTypeC, shapeC.size(), shapeC.data(), format);
+
+    return opDesc;
+}
+
+bool SetInputData(OpRunner &runner, int64_t m, int64_t k, const std::string& rowPtrPath, const std::string& colPath, const std::string& valuesPath, const std::string& bPath)
+{
+    // set a_shape
+    auto aShapePtr = runner.GetInputBuffer<int64_t>(0); // int64_t *
+    aShapePtr[0] = m;
+    aShapePtr[1] = k;
+
+    size_t fileSize = 0;
+    ReadFile(rowPtrPath.c_str(), fileSize, runner.GetInputBuffer<void>(1), runner.GetInputSize(1));
+    ReadFile(colPath.c_str(), fileSize, runner.GetInputBuffer<void>(2), runner.GetInputSize(2));
+    ReadFile(valuesPath.c_str(), fileSize, runner.GetInputBuffer<void>(3), runner.GetInputSize(3));
+    ReadFile(bPath.c_str(), fileSize, runner.GetInputBuffer<void>(4), runner.GetInputSize(4));
+    // INFO_LOG("Set input success");
+    return true;
+}
+
+bool ProcessOutputData(OpRunner &runner, const std::string& outputCPath)
+{
+    WriteFile(outputCPath.c_str(), runner.GetOutputBuffer<void>(0), runner.GetOutputSize(0));
+    // INFO_LOG("Write output success");
+    return true;
+}
+
+void DestroyResource()
+{
+    bool flag = false;
+    if (aclrtResetDevice(deviceId) != ACL_SUCCESS) {
+        ERROR_LOG("Reset device %d failed", deviceId);
+        flag = true;
+    }
+    // INFO_LOG("Reset Device success");
+    if (aclFinalize() != ACL_SUCCESS) {
+        ERROR_LOG("Finalize acl failed");
+        flag = true;
+    }
+    if (flag) {
+        ERROR_LOG("Destroy resource failed");
+    } else {
+        // INFO_LOG("Destroy resource success");
+    }
+}
+
+bool InitResource()
+{
+    std::string output = "../output";
+    if (access(output.c_str(), 0) == -1) {
+        int ret = mkdir(output.c_str(), 0700);
+        if (ret == 0) {
+            // INFO_LOG("Make output directory successfully");
+        } else {
+            ERROR_LOG("Make output directory fail");
+            return false;
+        }
+    }
+
+    if (aclInit(nullptr) != ACL_SUCCESS) {
+        ERROR_LOG("acl init failed");
+        return false;
+    }
+
+    if (aclrtSetDevice(deviceId) != ACL_SUCCESS) {
+        ERROR_LOG("Set device failed. deviceId is %d", deviceId);
+        (void)aclFinalize();
+        return false;
+    }
+    // INFO_LOG("Set device[%d] success", deviceId);
+
+    // runMode is ACL_HOST which represents app is running in host
+    // runMode is ACL_DEVICE which represents app is running in device
+    aclrtRunMode runMode;
+    if (aclrtGetRunMode(&runMode) != ACL_SUCCESS) {
+        ERROR_LOG("Get run mode failed");
+        DestroyResource();
+        return false;
+    }
+    g_isDevice = (runMode == ACL_DEVICE);
+    // INFO_LOG("Get RunMode[%d] success", runMode);
+
+    return true;
+}
+
+bool RunOp(int64_t m, int64_t k, int64_t n, int64_t nnz, const std::string& rowPtr, const std::string& col, const std::string& values, const std::string& b, const std::string& c)
+{
+    // create op desc
+    OperatorDesc opDesc = CreateOpDesc(m, k, n, nnz);
+
+    // create Runner
+    OpRunner opRunner(&opDesc);
+    if (!opRunner.Init()) {
+        ERROR_LOG("Init OpRunner failed");
+        return false;
+    }
+
+    // Load inputs
+    if (!SetInputData(opRunner, m, k, rowPtr, col, values, b)) {
+        ERROR_LOG("Set input data failed");
+        return false;
+    }
+
+    // Run op
+    Timer::Start("opRunner.RunOp");
+    bool result = opRunner.RunOp();
+    Timer::Stop("opRunner.RunOp");
+
+    if (!result) {
+        ERROR_LOG("Run op failed");
+        return false;
+    }
+
+    // process output data
+    if (!ProcessOutputData(opRunner, c)) {
+        ERROR_LOG("Process output data failed");
+        return false;
+    }
+
+    INFO_LOG("Run op success");
+    return true;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc != 12) {
+        std::cerr << "Usage: " << argv[0] << " <M> <K> <N> <NNZ> <row_ptr.bin> <col.bin> <values.bin> <b.bin> <c.bin> <category> <sample_name>" << std::endl;
+        return FAILED;
+    }
+
+    int64_t m = std::stoll(argv[1]);
+    int64_t k = std::stoll(argv[2]);
+    int64_t n = std::stoll(argv[3]);
+    int64_t nnz = std::stoll(argv[4]);
+    std::string rowPtr = argv[5];
+    std::string col = argv[6];
+    std::string values = argv[7];
+    std::string b = argv[8];
+    std::string c = argv[9];
+    std::string category = argv[10];
+    std::string sampleName = argv[11];
+
+    if (!InitResource()) {
+        ERROR_LOG("Init resource failed");
+        return FAILED;
+    }
+    // INFO_LOG("Init resource success");
+
+    if (!RunOp(m, k, n, nnz, rowPtr, col, values, b, c)) {
+        DestroyResource();
+        return FAILED;
+    }
+
+    DestroyResource();
+
+    Timer::CalculateAndRecordAll();
+    Log::Write(category, sampleName, Timer::GetTimings());
+    Timer::Clear();
+
+    return SUCCESS;
+}
