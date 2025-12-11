@@ -3,7 +3,7 @@
 #include "register/op_def_registry.h"
 #include "tiling/platform/platform_ascendc.h"
 
-constexpr uint32_t MAX_MMAD_N = 2048;
+constexpr uint32_t MAX_MMAD_N = 256;
 
 namespace optiling {
 static ge::graphStatus TilingFunc(gert::TilingContext* context)

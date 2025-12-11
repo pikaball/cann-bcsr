@@ -67,12 +67,13 @@ function main {
             echo "[ERROR]: Failed to parse matrix dimensions for $mtx_file"
             continue
         fi
-        read -r m k n nnz <<< "$dims"
+        read -r m k n nnz window_num block_num <<< "$dims"
         echo "[INFO]: Matrix dimensions (M, K, N, NNZ): $m, $k, $n, $nnz"
+        echo "[INFO]: Block info (WindowNum, BlockNum): $window_num, $block_num"
 
         # 4. 定义输入输出文件路径
-        input_row_indices="$sample_dir/row_indices.bin"
-        input_col_indices="$sample_dir/col_indices.bin"
+        input_row_ptr="$sample_dir/row_ptr.bin"
+        input_col="$sample_dir/col_idx.bin"
         input_values="$sample_dir/values.bin"
         input_b="$sample_dir/x2_gm.bin"
         output_c="$OUTPUT_DIR/${sample_name}_output_c.bin"
@@ -81,7 +82,7 @@ function main {
         export LD_LIBRARY_PATH=$_ASCEND_INSTALL_PATH/opp/vendors/customize/op_api/lib:$LD_LIBRARY_PATH
         # echo "[INFO]: Execute op for $sample_name!"
         category=$(basename $category_dir)
-        ./output/execute_spmm_op $m $k $n $nnz $input_row_indices $input_col_indices $input_values $input_b $output_c $category $sample_name
+        ./output/execute_spmm_op $m $k $n $window_num $block_num $input_row_ptr $input_col $input_values $input_b $output_c $category $sample_name
         if [ $? -ne 0 ]; then
             echo "[ERROR]: Acl executable run failed for sample $sample_name!"
             continue

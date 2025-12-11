@@ -13,7 +13,7 @@
 #include <limits>
 
 #include "acl/acl_op_compiler.h"
-#include "aclnn_coo_spmm_custom.h"
+#include "aclnn_bcsr_spmm_custom.h"
 #include "common.h"
 #include "timer.h"
 
@@ -336,14 +336,14 @@ bool OpRunner::RunOp()
 
     size_t workspaceSize = 0;
     aclOpExecutor *handle = nullptr;
-    auto ret = aclnnCooSpmmCustomGetWorkspaceSize(inputArray_[0], inputTensor_[0], inputTensor_[1], inputTensor_[2], inputTensor_[3], outputTensor_[0],
+    auto ret = aclnnBcsrSpmmCustomGetWorkspaceSize(inputArray_[0], inputTensor_[0], inputTensor_[1], inputTensor_[2], inputTensor_[3], outputTensor_[0],
                                                  &workspaceSize, &handle);
     if (ret != ACL_SUCCESS) {
         (void)aclrtDestroyStream(stream);
         ERROR_LOG("Get Operator Workspace failed. error code is %d", static_cast<int32_t>(ret));
         return false;
     }
-    // INFO_LOG("Execute aclnnCooSpmmCustomGetWorkspaceSize success, workspace size %lu", workspaceSize);
+    // INFO_LOG("Execute aclnnBcsrSpmmCustomGetWorkspaceSize success, workspace size %lu", workspaceSize);
 
     if (workspaceSize != 0) {
         if (aclrtMalloc(&workspace_, workspaceSize, ACL_MEM_MALLOC_HUGE_FIRST) != ACL_SUCCESS) {
@@ -351,17 +351,17 @@ bool OpRunner::RunOp()
         }
     }
 
-    Timer::Start("aclnnCooSpmmCustom");
-    ret = aclnnCooSpmmCustom(workspace_, workspaceSize, handle, stream);
+    Timer::Start("aclnnBcsrSpmmCustom");
+    ret = aclnnBcsrSpmmCustom(workspace_, workspaceSize, handle, stream);
     if (ret != ACL_SUCCESS) {
         (void)aclrtDestroyStream(stream);
         ERROR_LOG("Execute Operator failed. error code is %d", static_cast<int32_t>(ret));
         return false;
     }
-    // INFO_LOG("Execute aclnnCooSpmmCustom success");
+    INFO_LOG("Execute aclnnBcsrSpmmCustom success");
 
     ret = aclrtSynchronizeStreamWithTimeout(stream, 5000);
-    Timer::Stop("aclnnCooSpmmCustom");
+    Timer::Stop("aclnnBcsrSpmmCustom");
     if (ret != SUCCESS) {
         ERROR_LOG("Synchronize stream failed. error code is %d", static_cast<int32_t>(ret));
         (void)aclrtDestroyStream(stream);

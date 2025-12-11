@@ -24,12 +24,15 @@
 bool g_isDevice = false;
 int deviceId = 0;
 
-OperatorDesc CreateOpDesc(int64_t m, int64_t k, int64_t n, int64_t nnz)
+const int64_t TILE_M = 16;
+const int64_t TILE_K = 16;
+
+OperatorDesc CreateOpDesc(int64_t m, int64_t k, int64_t n, int64_t windowNum, int64_t blockNum)
 {
     // define operator
-    std::vector<int64_t> shapeRowIndices{nnz};
-    std::vector<int64_t> shapeColIndices{nnz};
-    std::vector<int64_t> shapeValues{nnz};
+    std::vector<int64_t> shapeRowPtr{windowNum + 1};
+    std::vector<int64_t> shapeCol{blockNum};
+    std::vector<int64_t> shapeValues{blockNum * TILE_M * TILE_K};
     std::vector<int64_t> shapeAShape{2};
     std::vector<int64_t> shapeB{k, n};
     std::vector<int64_t> shapeC{m, n};
@@ -45,8 +48,8 @@ OperatorDesc CreateOpDesc(int64_t m, int64_t k, int64_t n, int64_t nnz)
     OperatorDesc opDesc;
     opDesc.SetInputArrayNum(1);
     opDesc.AddInputTensorDesc(dataTypeAShape, shapeAShape.size(), shapeAShape.data(), format);
-    opDesc.AddInputTensorDesc(dataTypeIndices, shapeRowIndices.size(), shapeRowIndices.data(), format);
-    opDesc.AddInputTensorDesc(dataTypeIndices, shapeColIndices.size(), shapeColIndices.data(), format);
+    opDesc.AddInputTensorDesc(dataTypeIndices, shapeRowPtr.size(), shapeRowPtr.data(), format);
+    opDesc.AddInputTensorDesc(dataTypeIndices, shapeCol.size(), shapeCol.data(), format);
     opDesc.AddInputTensorDesc(dataTypeValues, shapeValues.size(), shapeValues.data(), format);
     opDesc.AddInputTensorDesc(dataTypeB, shapeB.size(), shapeB.data(), format);
     opDesc.AddOutputTensorDesc(dataTypeC, shapeC.size(), shapeC.data(), format);
@@ -135,10 +138,10 @@ bool InitResource()
     return true;
 }
 
-bool RunOp(int64_t m, int64_t k, int64_t n, int64_t nnz, const std::string& rowPtr, const std::string& col, const std::string& values, const std::string& b, const std::string& c)
+bool RunOp(int64_t m, int64_t k, int64_t n, int64_t windowNum, int64_t blockNum, const std::string& rowPtr, const std::string& col, const std::string& values, const std::string& b, const std::string& c)
 {
     // create op desc
-    OperatorDesc opDesc = CreateOpDesc(m, k, n, nnz);
+    OperatorDesc opDesc = CreateOpDesc(m, k, n, windowNum, blockNum);
 
     // create Runner
     OpRunner opRunner(&opDesc);
@@ -175,22 +178,24 @@ bool RunOp(int64_t m, int64_t k, int64_t n, int64_t nnz, const std::string& rowP
 
 int main(int argc, char **argv)
 {
-    if (argc != 12) {
-        std::cerr << "Usage: " << argv[0] << " <M> <K> <N> <NNZ> <row_ptr.bin> <col.bin> <values.bin> <b.bin> <c.bin> <category> <sample_name>" << std::endl;
+    if (argc != 13) {
+        // std::cerr << "Usage: " << argv[0] << " <M> <K> <N> <NNZ> <row_ptr.bin> <col.bin> <values.bin> <b.bin> <c.bin> <category> <sample_name>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <M> <K> <N> <WINDOW_NUM> <BLOCK_NUM> <row_ptr.bin> <col.bin> <values.bin> <b.bin> <c.bin> <category> <sample_name>" << std::endl;
         return FAILED;
     }
 
     int64_t m = std::stoll(argv[1]);
     int64_t k = std::stoll(argv[2]);
     int64_t n = std::stoll(argv[3]);
-    int64_t nnz = std::stoll(argv[4]);
-    std::string rowPtr = argv[5];
-    std::string col = argv[6];
-    std::string values = argv[7];
-    std::string b = argv[8];
-    std::string c = argv[9];
-    std::string category = argv[10];
-    std::string sampleName = argv[11];
+    int64_t windowNum = std::stoll(argv[4]);
+    int64_t blockNum = std::stoll(argv[5]);
+    std::string rowPtr = argv[6];
+    std::string col = argv[7];
+    std::string values = argv[8];
+    std::string b = argv[9];
+    std::string c = argv[10];
+    std::string category = argv[11];
+    std::string sampleName = argv[12];
 
     if (!InitResource()) {
         ERROR_LOG("Init resource failed");
@@ -198,7 +203,7 @@ int main(int argc, char **argv)
     }
     // INFO_LOG("Init resource success");
 
-    if (!RunOp(m, k, n, nnz, rowPtr, col, values, b, c)) {
+    if (!RunOp(m, k, n, windowNum, blockNum, rowPtr, col, values, b, c)) {
         DestroyResource();
         return FAILED;
     }

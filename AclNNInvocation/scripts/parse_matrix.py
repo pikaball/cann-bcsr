@@ -43,7 +43,7 @@ def parse_mtx_to_bcsr(file_path, BLOCK_M=16, BLOCK_K=16):
         
         # Save outputs
         sample_name = os.path.splitext(os.path.basename(file_path))[0]
-        output_dir = os.path.join(os.path.dirname(file_path), sample_name + "_bcsr")
+        output_dir = os.path.join(os.path.dirname(file_path), sample_name)
         os.makedirs(output_dir, exist_ok=True)
         
         row_ptr.tofile(os.path.join(output_dir, 'row_ptr.bin'))
@@ -60,7 +60,7 @@ def parse_mtx_to_bcsr(file_path, BLOCK_M=16, BLOCK_K=16):
             f.write(f"Num_blocks=0\n")
             f.write(f"Total_values_stored=0\n")
         
-        print(f"{M} {K} {N} {nnz}")
+        print(f"{M} {K} {N} {nnz} {block_rows} 0")
         return
     
     # Parse data lines
@@ -147,7 +147,7 @@ def parse_mtx_to_bcsr(file_path, BLOCK_M=16, BLOCK_K=16):
     
     # Create output directory
     sample_name = os.path.splitext(os.path.basename(file_path))[0]
-    output_dir = os.path.join(os.path.dirname(file_path), sample_name + "_bcsr")
+    output_dir = os.path.join(os.path.dirname(file_path), sample_name)
     os.makedirs(output_dir, exist_ok=True)
     
     # Save binary files
@@ -167,7 +167,7 @@ def parse_mtx_to_bcsr(file_path, BLOCK_M=16, BLOCK_K=16):
         f.write(f"Total_values_stored={len(values_np)}\n")
     
     # Print dimensions for calling script
-    print(f"{M} {K} {N} {nnz}")
+    print(f"{M} {K} {N} {nnz} {block_rows} {len(all_block_cols)}")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
