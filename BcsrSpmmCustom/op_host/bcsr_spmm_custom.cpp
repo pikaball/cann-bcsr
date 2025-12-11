@@ -3,7 +3,7 @@
 #include "register/op_def_registry.h"
 #include "tiling/platform/platform_ascendc.h"
 
-constexpr uint32_t MAX_MMAD_N = 256;
+constexpr uint32_t MAX_MMAD_N = 32;
 
 namespace optiling {
 static ge::graphStatus TilingFunc(gert::TilingContext* context)
@@ -33,7 +33,8 @@ static ge::graphStatus TilingFunc(gert::TilingContext* context)
     uint32_t totalLength = context->GetInputShape(1)->GetOriginShape().GetShapeSize() - 1;
     uint32_t blockDim = ascendcPlatform.GetCoreNumAic();    // Cube core 数量
     blockDim = blockDim > totalLength ? totalLength : blockDim;
-    context->SetBlockDim(blockDim);
+    // context->SetBlockDim(blockDim);
+    context->SetBlockDim(1);
     tiling.set_totalLength(totalLength);
 
     uint32_t formerNum = totalLength % blockDim;

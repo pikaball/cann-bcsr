@@ -32,14 +32,14 @@ public:
         if (AscendC::GetBlockIdx() < formerNum) {
             this->rowWindowNum = formerLength;
             rowPtrGm.SetGlobalBuffer((__gm__ int32_t *)row_ptr + formerLength * AscendC::GetBlockIdx(), formerLength + 1);
-            cGM.SetGlobalBuffer((__gm__ cType *)c + formerLength * AscendC::GetBlockIdx() * CUBE_BLOCK_M * N, 
+            cGm.SetGlobalBuffer((__gm__ cType *)c + formerLength * AscendC::GetBlockIdx() * CUBE_BLOCK_M * N, 
                 formerLength * CUBE_BLOCK_M * N);
         } else if (AscendC::GetBlockIdx() < formerNum + tailNum) {
             this->rowWindowNum = tailLength;
             rowPtrGm.SetGlobalBuffer((__gm__ int32_t *)row_ptr + formerLength * formerNum +
                 tailLength * (AscendC::GetBlockIdx() - formerNum), tailLength + 1
             );
-            cGM.SetGlobalBuffer((__gm__ cType *)c + (formerLength * formerNum +
+            cGm.SetGlobalBuffer((__gm__ cType *)c + (formerLength * formerNum +
                 tailLength * (AscendC::GetBlockIdx() - formerNum)) * CUBE_BLOCK_M * N,
                 tailLength * CUBE_BLOCK_M * N
             );
@@ -50,7 +50,7 @@ public:
         valGm.SetGlobalBuffer((__gm__ aType *)val + CUBE_BLOCK_SIZE * rowPtrGm.GetValue(0),
             CUBE_BLOCK_SIZE * (rowPtrGm.GetValue(formerLength) - rowPtrGm.GetValue(0))
         );
-        bGM.SetGlobalBuffer((__gm__ bType *)b, (uint64_t)K * N * sizeof(bType));
+        bGm.SetGlobalBuffer((__gm__ bType *)b, (uint64_t)K * N * sizeof(bType));
 
         pipe.InitBuffer(inQueueA1, 1, CUBE_BLOCK_SIZE * sizeof(aType)); // 512B
         pipe.InitBuffer(inQueueA2, 1, CUBE_BLOCK_SIZE * sizeof(aType)); // 512B
@@ -80,22 +80,23 @@ public:
     }
 
 private:
-    // 每次 A 只读一个块，所以 ND 即 ZZ
-    // 可以直接用 LoadData 搬运 512B, GM->A2
+    // // 每次 A 只读一个块，所以 ND 即 ZZ
+    // // 可以直接用 LoadData 搬运 512B, GM->A2
     // __aicore__ inline void CopyInA(int32_t row, int32_t i) {
     //     AscendC::LocalTensor<aType> a2Local = inQueueA2.AllocTensor<aType>();
+    //     auto aGm = this->valGm[(rowPtrGm.GetValue(row) - rowPtrGm.GetValue(0) + i) * CUBE_BLOCK_SIZE];
     //     AscendC::LoadData2DParams params = {
     //         // startIndex, repeatTimes, srcStride, 0, dstGap, ifTranspose, 0
-    //         (rowPtrGm.GetValue(row) - rowPtrGm.GetValue(0) + i), 1, 0, 0, 0, false, 0
+    //         static_cast<uint16_t>(rowPtrGm.GetValue(row) - rowPtrGm.GetValue(0) + i), 1, 0, 0, 0, false, 0
     //     };
     //     AscendC::LoadData(a2Local, aGm, params);
     //     inQueueA2.EnQue<aType>(a2Local);
     // }
 
-    // 但是这里保留 GM->A1->A2 的形式，方便后续扩展
+    // 但是这里保留 Gm->A1->A2 的形式，方便后续扩展
     __aicore__ inline void CopyInA(int32_t row, int32_t i) {
         AscendC::LocalTensor<aType> a1Local = inQueueA1.AllocTensor<aType>();
-        auto aGM = this->valGm[(rowPtrGm.GetValue(row) - rowPtrGm.GetValue(0) + i) * CUBE_BLOCK_SIZE];
+        auto aGm = this->valGm[(rowPtrGm.GetValue(row) - rowPtrGm.GetValue(0) + i) * CUBE_BLOCK_SIZE];
 
         AscendC::Nd2NzParams params;
         params.ndNum = 1;
@@ -107,15 +108,24 @@ private:
         params.dstNzNStride = 1;
         params.dstNzMatrixStride = 0;
 
-        AscendC::DataCopy(a1Local, aGM, params);
-        inQueueA2.EnQue<aType>(a1Local);
+        AscendC::DataCopy(a1Local, aGm, params);
+        // if (row == 0 && i == 0) {
+        //     uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(16)};
+        //     AscendC::ShapeInfo shapeInfo(2, array); 
+        //     AscendC::DumpTensor(aGm, 0, 16*16, shapeInfo);
+        //     AscendC::DumpTensor(a1Local, 1, 16*16, shapeInfo);
+        // }
+        inQueueA1.EnQue<aType>(a1Local);
     }
 
     // DataCopy API for each line of B
     // 如果 leading N 太大用不了 ND2NZ 随路转化
     __aicore__ inline void CopyInB(int32_t progress, int32_t k) {
         AscendC::LocalTensor<bType> b1Local = inQueueB1.AllocTensor<bType>();
-        auto bGm = this->bGM[k * N + progress * this->mmadN];
+        auto bGm = this->bGm[k * N + progress * this->mmadN];
+            uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+            AscendC::ShapeInfo shapeInfo(2, array); 
+            AscendC::DumpTensor(bGm, 0, 16*62);
 
         AscendC::DataCopyParams params;
         // 有一小部分 padding 的数据是不需要的，Mmad 时会忽略
@@ -123,12 +133,15 @@ private:
         params.blockLen = 1;
         params.srcStride = 0;
         params.dstStride = CUBE_BLOCK_K;
+        AscendC::printf("%d %d %d %d\n", params.blockCount, params.blockLen, params.srcStride, params.dstStride);
+        // TODO: WHY loop failed?
         for (int32_t i = 0; i < CUBE_BLOCK_K; i++) {
-            auto src = bGm[i * N];
-            auto dst = b1Local[i * mmadCubeBlockNum];
-            AscendC::DataCopy(dst, src, params);
+            AscendC::DataCopy(b1Local[i * mmadCubeBlockNum], bGm[i * N], params);
+            // AscendC::DumpTensor(b1Local, 2, 16*32, shapeInfo);
+            AscendC::printf("i=%d\n", i);
         }
         inQueueB1.EnQue<bType>(b1Local);
+        AscendC::printf("end\n");  // BUG:no output
     }
 
     __aicore__ inline void SplitA() {
@@ -173,7 +186,7 @@ private:
         params.m = CUBE_BLOCK_M;
         // TODO: K 不一定跟 CUBE_BLOCK_K 对齐
         // col == K / CUBE_BLOCK_K * CUBE_BLOCK_K, 尾部需要特殊处理
-        // 可能可以通过给 bGM 更大的空间，padding 0 来解决
+        // 可能可以通过给 bGm 更大的空间，padding 0 来解决
         params.k = CUBE_BLOCK_K;
         params.n = (progress == mmadNum - 1) ? lastMmadN : this->mmadN;
         AscendC::Mmad(c1Local, a2Local, b2Local, params);
@@ -185,7 +198,7 @@ private:
 
     // Fixpipe API
     __aicore__ inline void CopyOut(int32_t row, int32_t progress) {
-        auto cGm = this->cGM[row * CUBE_BLOCK_M * N + progress * mmadCubeBlockNum * CUBE_BLOCK_M];
+        auto cGm = this->cGm[row * CUBE_BLOCK_M * N + progress * mmadCubeBlockNum * CUBE_BLOCK_M];
         AscendC::LocalTensor<cType> c1Local = outQueueCO1.DeQue<cType>();
 
         AscendC::FixpipeParamsV220 params;
@@ -214,8 +227,8 @@ private:
     AscendC::GlobalTensor<int32_t> colGm;
     AscendC::GlobalTensor<aType> valGm;
 
-    AscendC::GlobalTensor<bType> bGM;
-    AscendC::GlobalTensor<cType> cGM;
+    AscendC::GlobalTensor<bType> bGm;
+    AscendC::GlobalTensor<cType> cGm;
 
     int32_t N;
     uint32_t rowWindowNum;
