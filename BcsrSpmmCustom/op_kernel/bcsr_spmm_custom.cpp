@@ -18,7 +18,8 @@ public:
         uint32_t formerNum, uint32_t formerLength,
         uint32_t tailNum, uint32_t tailLength,
         uint32_t mmadNum, uint32_t mmadN,   
-        uint32_t lastMmadN, uint32_t lastMmadCubeBlockNum
+        uint32_t lastMmadN, uint32_t lastMmadCubeBlockNum,
+        uint32_t lastKLength
     ) {
         // set cube only
         KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIC_ONLY);
@@ -31,6 +32,7 @@ public:
         this->lastMmadN = lastMmadN;
         this->lastMmadCubeBlockNum = lastMmadCubeBlockNum;
         this->mmadN = mmadN;
+        this->lastKLength = lastKLength;
         if (AscendC::GetBlockIdx() < formerNum) {
             this->rowWindowNum = formerLength;
             rowPtrGm.SetGlobalBuffer((__gm__ int32_t *)row_ptr + formerLength * AscendC::GetBlockIdx(), formerLength + 1);
@@ -248,6 +250,7 @@ private:
     uint32_t lastMmadN;
     uint32_t lastMmadCubeBlockNum;
     uint32_t mmadN;
+    uint32_t lastKLength;
 };
 
 extern "C" __global__ __aicore__ void bcsr_spmm_custom(
@@ -263,7 +266,8 @@ extern "C" __global__ __aicore__ void bcsr_spmm_custom(
         tiling_data.formerNum, tiling_data.formerLength,
         tiling_data.tailNum, tiling_data.tailLength,
         tiling_data.mmadNum, tiling_data.mmadN,
-        tiling_data.lastMmadN, tiling_data.lastMmadCubeBlockNum
+        tiling_data.lastMmadN, tiling_data.lastMmadCubeBlockNum, 
+        tiling_data.lastKLength
     );
     op.Process();
 }
