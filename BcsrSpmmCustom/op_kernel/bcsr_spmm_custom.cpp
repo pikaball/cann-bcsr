@@ -54,7 +54,7 @@ public:
         valGm.SetGlobalBuffer((__gm__ aType *)val + CUBE_BLOCK_SIZE * rowPtrGm.GetValue(0),
             CUBE_BLOCK_SIZE * (rowPtrGm.GetValue(this->rowWindowNum) - rowPtrGm.GetValue(0))
         );
-        bGm.SetGlobalBuffer((__gm__ bType *)b, (uint64_t)K * N * sizeof(bType));
+        bGm.SetGlobalBuffer((__gm__ bType *)b, (uint64_t)K * N);
 
         pipe.InitBuffer(inQueueA1, 1, CUBE_BLOCK_SIZE * sizeof(aType)); // 512B
         pipe.InitBuffer(inQueueA2, 1, CUBE_BLOCK_SIZE * sizeof(aType)); // 512B
@@ -198,8 +198,25 @@ private:
         // 可能可以通过给 bGm 更大的空间，padding 0 来解决
         params.k = CUBE_BLOCK_K;
         params.n = (progress == mmadNum - 1) ? lastMmadN : this->mmadN;
+
+        if (progress == 0) {
+        uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+        AscendC::ShapeInfo shapeInfo(2, array); 
+        AscendC::DumpTensor(a2Local, 0, 16*32, shapeInfo);
+        AscendC::DumpTensor(b2Local, 1, 16*32, shapeInfo);
+        // AscendC::DumpTensor(c1Local, 2, 16*32, shapeInfo);
+        }
+
         AscendC::Mmad(c1Local, a2Local, b2Local, params);
 
+        //debug output
+        if (progress == 0) {
+        uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+        AscendC::ShapeInfo shapeInfo(2, array); 
+        // AscendC::DumpTensor(a2Local, 0, 16*32, shapeInfo);
+        // AscendC::DumpTensor(b2Local, 1, 16*32, shapeInfo);
+        AscendC::DumpTensor(c1Local, 2, 16*32, shapeInfo);
+        }
         outQueueCO1.EnQue<cType>(c1Local);
         inQueueA2.FreeTensor(a2Local);
         inQueueB2.FreeTensor(b2Local);
@@ -219,12 +236,13 @@ private:
         params.srcNdStride = 0;
         params.dstNdStride = 0;
 
-        // 默认使能 NZ -> ND
+        AscendC::SetAtomicAdd<cType>();
         AscendC::Fixpipe(cGm, c1Local, params);
+        AscendC::SetAtomicNone();
         // AscendC::printf("Debug C Block: row %d, block col %d\n", row, progress);
-        // uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
-        // AscendC::ShapeInfo shapeInfo(2, array); 
-        // AscendC::DumpTensor(this->cGm, 0, 32*32, shapeInfo);
+        uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+        AscendC::ShapeInfo shapeInfo(2, array); 
+        AscendC::DumpTensor(this->cGm, 3, 32*32, shapeInfo);
         // AscendC::DumpTensor(c1Local, 1, 16*32, shapeInfo);
         outQueueCO1.FreeTensor(c1Local);
     }
