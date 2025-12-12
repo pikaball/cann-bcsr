@@ -33,11 +33,14 @@ static ge::graphStatus TilingFunc(gert::TilingContext* context)
     uint32_t totalLength = context->GetInputShape(1)->GetOriginShape().GetShapeSize() - 1;
     uint32_t blockDim = ascendcPlatform.GetCoreNumAic();    // Cube core 数量
     blockDim = blockDim > totalLength ? totalLength : blockDim;
-    // context->SetBlockDim(blockDim);
-    context->SetBlockDim(1);
+    context->SetBlockDim(blockDim);
+    // context->SetBlockDim(1);
     tiling.set_totalLength(totalLength);
 
     uint32_t formerNum = totalLength % blockDim;
+    if (formerNum == 0) {
+        formerNum = blockDim;
+    }
     uint32_t formerLength = (totalLength + blockDim - 1) / blockDim;
     uint32_t tailNum = blockDim - formerNum;
     uint32_t tailLength = totalLength / blockDim;
@@ -56,6 +59,13 @@ static ge::graphStatus TilingFunc(gert::TilingContext* context)
     tiling.set_mmadN(mmadN);
     tiling.set_lastMmadN(lastMmadN);
     tiling.set_lastMmadCubeBlockNum(lastMmadCubeBlockNum);
+
+    // 处理K不对齐
+    uint32_t lastKLength = K % alignNum;
+    if (lastKLength == 0) {
+        lastKLength = alignNum;
+    }
+    tiling.set_lastKLength(lastKLength);
 
     tiling.SaveToBuffer(context->GetRawTilingData()->GetData(), context->GetRawTilingData()->GetCapacity());
     context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());

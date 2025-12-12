@@ -23,7 +23,8 @@ BEGIN_TILING_DATA_DEF(BcsrSpmmCustomTilingData)
   TILING_DATA_FIELD_DEF(uint32_t, tailNum);
   TILING_DATA_FIELD_DEF(uint32_t, tailLength);
 
-  // TODO: 需要考虑K不对齐的情况，A已经处理过了，读取B比较麻烦
+  // 处理K不对齐
+  TILING_DATA_FIELD_DEF(uint32_t, lastKLength);
 
 END_TILING_DATA_DEF;
 

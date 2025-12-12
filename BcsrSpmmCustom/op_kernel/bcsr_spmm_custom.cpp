@@ -127,7 +127,7 @@ private:
         // j 是B的block的列
         AscendC::LocalTensor<bType> b1Local = inQueueB1.AllocTensor<bType>();
         
-        auto offset = col * CUBE_BLOCK_K * N + j * this->mmadN;
+        auto offset = col * N + j * this->mmadN;
         
         AscendC::DataCopyParams params;
         // 有一小部分 padding 的数据是不需要的，Mmad 时会忽略
