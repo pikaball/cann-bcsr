@@ -49,10 +49,10 @@ public:
             );
         }
         colGm.SetGlobalBuffer((__gm__ int32_t *)col + rowPtrGm.GetValue(0), 
-            rowPtrGm.GetValue(formerLength) - rowPtrGm.GetValue(0)
+            rowPtrGm.GetValue(this->rowWindowNum) - rowPtrGm.GetValue(0)
         );
         valGm.SetGlobalBuffer((__gm__ aType *)val + CUBE_BLOCK_SIZE * rowPtrGm.GetValue(0),
-            CUBE_BLOCK_SIZE * (rowPtrGm.GetValue(formerLength) - rowPtrGm.GetValue(0))
+            CUBE_BLOCK_SIZE * (rowPtrGm.GetValue(this->rowWindowNum) - rowPtrGm.GetValue(0))
         );
         bGm.SetGlobalBuffer((__gm__ bType *)b, (uint64_t)K * N * sizeof(bType));
 
