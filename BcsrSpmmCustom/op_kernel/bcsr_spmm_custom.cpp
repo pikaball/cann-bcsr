@@ -125,7 +125,7 @@ private:
     // DataCopy API for each line of B
     // 如果 leading N 太大用不了 ND2NZ 随路转化
     __aicore__ inline void CopyInB(int32_t j, int32_t col) {
-        // col是A的block的列，对B来说是block的行
+        // col是A的列，对B来说是行
         // j 是B的block的列
         AscendC::LocalTensor<bType> b1Local = inQueueB1.AllocTensor<bType>();
         
@@ -140,18 +140,16 @@ private:
         params.srcStride = 0;
         params.dstStride = 0;
         // AscendC::printf("%d %d %d %d\n", params.blockCount, params.blockLen, params.srcStride, params.dstStride);
-        // TODO: WHY loop failed?
         for (int32_t i = 0; i < CUBE_BLOCK_K; i++) {
             // Copy one line at a time
             AscendC::DataCopy(b1Local[i * mmadN], this->bGm[offset + i * N], params);
         }
 
-        if (j == 0 && col == 0) {
-             uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
-             AscendC::ShapeInfo shapeInfo(2, array); 
-             AscendC::DumpTensor(this->bGm, 0, 16*32, shapeInfo);
-             AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
-        }
+        // AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
+        // uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+        // AscendC::ShapeInfo shapeInfo(2, array); 
+        // AscendC::DumpTensor(this->bGm[offset], 0, 16*32, shapeInfo);
+        // AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
         inQueueB1.EnQue<bType>(b1Local);
     }
 
@@ -223,6 +221,11 @@ private:
 
         // 默认使能 NZ -> ND
         AscendC::Fixpipe(cGm, c1Local, params);
+        // AscendC::printf("Debug C Block: row %d, block col %d\n", row, progress);
+        // uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+        // AscendC::ShapeInfo shapeInfo(2, array); 
+        // AscendC::DumpTensor(this->cGm, 0, 32*32, shapeInfo);
+        // AscendC::DumpTensor(c1Local, 1, 16*32, shapeInfo);
         outQueueCO1.FreeTensor(c1Local);
     }
 
