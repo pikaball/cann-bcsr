@@ -34,7 +34,7 @@ public:
         this->mmadN = mmadN;
         this->lastKLength = lastKLength;
         // AscendC::printf("BcsrSpmmKernel Init: BlockIdx=%d, M=%d, K=%d, N=%d, mmadNum=%d, mmadN=%d\n", 
-            AscendC::GetBlockIdx(), M, K, N, mmadNum, mmadN);
+            // AscendC::GetBlockIdx(), M, K, N, mmadNum, mmadN);
         if (AscendC::GetBlockIdx() < formerNum) {
             this->rowWindowNum = formerLength;
             rowPtrGm.SetGlobalBuffer((__gm__ int32_t *)row_ptr + formerLength * AscendC::GetBlockIdx(), formerLength + 1);
@@ -171,20 +171,52 @@ private:
         params.blockLen = 16 * sizeof(bType) / 32;
         params.srcStride = 0;
         params.dstStride = 0;
+
+        // // N不对齐，行尾padding
+        // AscendC::DataCopyExtParams params2;
+        // params2.blockCount = 1;
+        // // 单位是Byte
+        // params2.blockLen = this->lastMmadN * sizeof(bType);
+        // params2.srcStride = 0;
+        // params2.dstStride = 0;
+
+        // AscendC::DataCopyPadExtParams<bType> padParams;
+        // padParams.isPad = true;
+        // padParams.paddingValue = (bType)0;
+        // padParams.leftPadding = 0;
+        // padParams.rightPadding = this->mmadN - this->lastMmadN;
+
         for (int32_t i = 0; i < CUBE_BLOCK_K; i++) {
+            // K不对齐
+            if (col + i >= K) {
+                for (int32_t k = 0; k < this->mmadN / 16; k++) {
+                    AscendC::Duplicate(b1Local[(i + k * CUBE_BLOCK_K) * 16], (bType)0, 16);
+                }
+                continue;
+            }
             for (int32_t k = 0; k < this->mmadN / 16; k++) {
                 AscendC::DataCopy(b1Local[(i + k * CUBE_BLOCK_K) * 16], this->bGm[offset + i * N + k * 16], params);
+            }
+            // N不对齐
+            if (j == mmadNum - 1 && this->lastMmadN < this->mmadN) {
+                // for (int32_t k = 0; k < this->mmadN / 16; k++) {
+                //     AscendC::DataCopyPad(b1Local[(i + k * CUBE_BLOCK_K) * 16], this->bGm[offset + i * N + k * 16], params2, padParams);
+                // }
+                AscendC::Duplicate(b1Local[(i + (this->lastMmadN / 16) * CUBE_BLOCK_K) * 16 + this->lastMmadN % 16], (bType)0, 16 - this->lastMmadN % 16);
+                for (int32_t k = this->lastMmadN / 16 + 1; k < this->mmadN / 16; k++) {
+                    AscendC::Duplicate(b1Local[(i + k * CUBE_BLOCK_K) * 16], (bType)0, 16);
+                }
             }
             // AscendC::DataCopy(b1Local[i * 16], this->bGm[offset + i * N], params);
             // AscendC::DataCopy(b1Local[(i + CUBE_BLOCK_K) * 16], this->bGm[offset + i * N + 16], params);
         }
 
-        // if (j == this->mmadNum - 1) {
-        //     AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
-        //     uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
-        //     AscendC::ShapeInfo shapeInfo(2, array); 
-        //     AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
-        // }
+        if (col + CUBE_BLOCK_K - 1 >= K) {
+            AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
+            uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+            AscendC::ShapeInfo shapeInfo(2, array); 
+            AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
+        }
         inQueueB1.EnQue<bType>(b1Local);
     }
 
