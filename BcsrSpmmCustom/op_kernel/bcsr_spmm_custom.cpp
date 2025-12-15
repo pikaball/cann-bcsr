@@ -179,11 +179,12 @@ private:
             // AscendC::DataCopy(b1Local[(i + CUBE_BLOCK_K) * 16], this->bGm[offset + i * N + 16], params);
         }
 
-        AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
-        uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
-        AscendC::ShapeInfo shapeInfo(2, array); 
-        // AscendC::DumpTensor(this->bGm[offset], 0, 16*32, shapeInfo);
-        AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
+        if (j == this->mmadNum - 1) {
+            AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
+            uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+            AscendC::ShapeInfo shapeInfo(2, array); 
+            AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
+        }
         inQueueB1.EnQue<bType>(b1Local);
     }
 
@@ -215,11 +216,11 @@ private:
 
         AscendC::LoadData2dTransposeParams params;
         params.startIndex = 0;
-        // params.repeatTimes = (progress == mmadNum - 1) ? lastMmadCubeBlockNum : mmadCubeBlockNum;
-        params.repeatTimes = 2;
+        params.repeatTimes = (progress == mmadNum - 1) ? lastMmadCubeBlockNum : mmadCubeBlockNum;
+        // params.repeatTimes = 2;
         params.srcStride = 1;
-        // params.dstGap = sizeof(bType) == 2 ? 0 : 1;
-        params.dstGap = 0;
+        params.dstGap = sizeof(bType) <= 2 ? 0 : 1;
+        // params.dstGap = 0;
         params.dstFracGap = 0;
         AscendC::LoadDataWithTranspose(b2Local, b1Local, params);
         // AscendC::printf("Debug SplitB: progress=%d\n", progress);
