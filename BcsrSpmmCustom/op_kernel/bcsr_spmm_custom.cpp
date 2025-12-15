@@ -33,7 +33,7 @@ public:
         this->lastMmadCubeBlockNum = lastMmadCubeBlockNum;
         this->mmadN = mmadN;
         this->lastKLength = lastKLength;
-        AscendC::printf("BcsrSpmmKernel Init: BlockIdx=%d, M=%d, K=%d, N=%d, mmadNum=%d, mmadN=%d\n", 
+        // AscendC::printf("BcsrSpmmKernel Init: BlockIdx=%d, M=%d, K=%d, N=%d, mmadNum=%d, mmadN=%d\n", 
             AscendC::GetBlockIdx(), M, K, N, mmadNum, mmadN);
         if (AscendC::GetBlockIdx() < formerNum) {
             this->rowWindowNum = formerLength;
@@ -179,12 +179,12 @@ private:
             // AscendC::DataCopy(b1Local[(i + CUBE_BLOCK_K) * 16], this->bGm[offset + i * N + 16], params);
         }
 
-        if (j == this->mmadNum - 1) {
-            AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
-            uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
-            AscendC::ShapeInfo shapeInfo(2, array); 
-            AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
-        }
+        // if (j == this->mmadNum - 1) {
+        //     AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
+        //     uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+        //     AscendC::ShapeInfo shapeInfo(2, array); 
+        //     AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
+        // }
         inQueueB1.EnQue<bType>(b1Local);
     }
 
