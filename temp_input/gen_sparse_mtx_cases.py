@@ -33,56 +33,27 @@ def _write_mtx(path: str, m: int, k: int, entries: List[Tuple[int, int, float]])
             f.write(f"{r1} {c1} {v:.6f}\n")
 
 
-def _gen_sparse_entries_blockwise(
+def _gen_sparse_entries(
     rng: np.random.Generator,
     m: int,
     k: int,
-    block_m: int = 16,
-    block_k: int = 16,
-    p_block: float = 0.5,
-    p_elem: float = 0.1,
+    density: float = 0.1,
 ) -> List[Tuple[int, int, float]]:
-    if m % block_m != 0 or k % block_k != 0:
-        raise ValueError("This generator assumes aligned M and K (multiples of 16).")
+    total = m * k
+    nnz = int(total * density)
+    nnz = max(1, min(nnz, total))
 
-    brs = m // block_m
-    bcs = k // block_k
+    flat_idxs = rng.choice(total, size=nnz, replace=False)
+    vals = rng.integers(1, 11, size=nnz, dtype=np.int32)
 
     entries: List[Tuple[int, int, float]] = []
+    for fi, v in zip(flat_idxs, vals):
+        r = int(fi // k)
+        c = int(fi % k)
+        entries.append((r + 1, c + 1, float(v)))
 
-    for br in range(brs):
-        active_bcs = [bc for bc in range(bcs) if rng.random() < p_block]
-        if not active_bcs:
-            active_bcs = [int(rng.integers(0, bcs))]
-
-        for bc in active_bcs:
-            # Choose a handful of non-zeros in this block.
-            total = block_m * block_k
-            nnz_in_block = max(1, int(round(total * p_elem)))
-            nnz_in_block = min(nnz_in_block, total)
-
-            flat_idxs = rng.choice(total, size=nnz_in_block, replace=False)
-            vals = rng.integers(1, 11, size=nnz_in_block, dtype=np.int32)
-
-            for fi, v in zip(flat_idxs, vals):
-                lr = int(fi // block_k)
-                lc = int(fi % block_k)
-                gr = br * block_m + lr
-                gc = bc * block_k + lc
-                # Store as float value (representable in float16 exactly for 1..10).
-                entries.append((gr + 1, gc + 1, float(v)))
-
-    # Make sure MatrixMarket is well-formed and deterministic order (optional but nice).
     entries.sort(key=lambda x: (x[0], x[1]))
-
-    # Deduplicate (shouldn't happen with our generation, but safe).
-    merged: Dict[Tuple[int, int], float] = {}
-    for r1, c1, v in entries:
-        merged[(r1, c1)] = v
-
-    merged_entries = [(r1, c1, v) for (r1, c1), v in merged.items()]
-    merged_entries.sort(key=lambda x: (x[0], x[1]))
-    return merged_entries
+    return entries
 
 
 def _sparse_to_dense(m: int, k: int, entries: List[Tuple[int, int, float]], dtype=np.float16) -> np.ndarray:
@@ -93,23 +64,18 @@ def _sparse_to_dense(m: int, k: int, entries: List[Tuple[int, int, float]], dtyp
 
 
 def gen_case(out_root: str, spec: CaseSpec, seed: int) -> None:
-    if spec.m % 16 != 0 or spec.k % 16 != 0:
-        raise ValueError("This generator is for aligned cases only (M,K multiples of 16).")
-    if spec.n % 16 != 0:
-        raise ValueError("This generator targets aligned N as well (N multiple of 16).")
-
+    # Removed alignment checks for arbitrary MNK support.
     rng = np.random.default_rng(seed)
 
     mtx_path = os.path.join(out_root, f"{spec.name}.mtx")
     sample_dir = os.path.join(out_root, spec.name)
     _ensure_dir(sample_dir)
 
-    entries = _gen_sparse_entries_blockwise(
+    entries = _gen_sparse_entries(
         rng=rng,
         m=spec.m,
         k=spec.k,
-        p_block=0.6 if spec.m == 32 else 0.5,
-        p_elem=0.12 if spec.m == 32 else 0.08,
+        density=0.1,
     )
 
     # Dense B: float16 KxN, values in [1,10]
@@ -141,9 +107,12 @@ def main() -> None:
     args = ap.parse_args()
 
     specs = [
-        CaseSpec(name="aligned_32", m=32, k=32, n=32),
-        CaseSpec(name="aligned_64", m=64, k=64, n=64),
-        CaseSpec(name="m16k16n32", m=16, k=16, n=32),
+        # CaseSpec(name="aligned_32", m=32, k=32, n=32),
+        # CaseSpec(name="aligned_64", m=64, k=64, n=64),
+        # CaseSpec(name="m16k16n32", m=16, k=16, n=32),
+        # CaseSpec(name="unaligned_62", m=62, k=62, n=62),
+        # CaseSpec(name="unaligned_511", m=511, k=511, n=511),
+        CaseSpec(name="unaligned_1000", m=1000, k=1001, n=1001),
     ]
 
     for i, spec in enumerate(specs):

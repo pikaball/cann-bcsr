@@ -70,8 +70,9 @@ public:
         for (int32_t row = 0; row < rowWindowNum; row++) {
             // AscendC::printf("Blockidx=%d, Processing row window %d/%d\n", AscendC::GetBlockIdx(), row, rowWindowNum);
             // 行窗口中的每块
+            int32_t rowBlockOffset = rowPtrGm.GetValue(row) - rowPtrGm.GetValue(0);
             for (int32_t i = 0; i < rowPtrGm.GetValue(row + 1) - rowPtrGm.GetValue(row); i++) {
-                int32_t col = colGm.GetValue(i);
+                int32_t col = colGm.GetValue(rowBlockOffset + i);
                 // AscendC::printf("  Processing block %d/%d, col block idx=%d\n", i, 
                     // rowPtrGm.GetValue(row + 1) - rowPtrGm.GetValue(row), col);
                 // B窗口行中的每个 mmad 块
@@ -211,12 +212,12 @@ private:
             // AscendC::DataCopy(b1Local[(i + CUBE_BLOCK_K) * 16], this->bGm[offset + i * N + 16], params);
         }
 
-        if (col + CUBE_BLOCK_K - 1 >= K) {
-            AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
-            uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
-            AscendC::ShapeInfo shapeInfo(2, array); 
-            AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
-        }
+        // if (col + CUBE_BLOCK_K - 1 >= K) {
+        //     AscendC::printf("Debug B Block: row %d, block col %d\n", col, j);
+        //     uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
+        //     AscendC::ShapeInfo shapeInfo(2, array); 
+        //     AscendC::DumpTensor(b1Local, 1, 16*32, shapeInfo);
+        // }
         inQueueB1.EnQue<bType>(b1Local);
     }
 
