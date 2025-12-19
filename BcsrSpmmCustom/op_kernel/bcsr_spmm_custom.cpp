@@ -289,12 +289,14 @@ private:
         AscendC::Mmad(c1Local, a2Local, b2Local, params);
 
         //debug output
-        // AscendC::printf("Debug Compute: progress=%d\n", progress);
+        // if (progress == 0) {
+        // // AscendC::printf("Debug Compute: progress=%d\n", progress);
         // uint32_t array[] = {static_cast<uint32_t>(16), static_cast<uint32_t>(32)};
         // AscendC::ShapeInfo shapeInfo(2, array); 
-        // AscendC::DumpTensor(a2Local, 0, 16*32, shapeInfo);
-        // AscendC::DumpTensor(b2Local, 1, 16*32, shapeInfo);
+        // // AscendC::DumpTensor(a2Local, 0, 16*32, shapeInfo);
+        // // AscendC::DumpTensor(b2Local, 1, 16*32, shapeInfo);
         // AscendC::DumpTensor(c1Local, 2, 16*32, shapeInfo);
+        // }
         
         outQueueCO1.EnQue<cType>(c1Local);
         inQueueA2.FreeTensor(a2Local);
